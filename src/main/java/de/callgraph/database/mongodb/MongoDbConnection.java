@@ -4,9 +4,23 @@ import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
+import io.github.cdimascio.dotenv.Dotenv;
 import org.bson.Document;
 
-public class MongoDbConnection {
+public final class MongoDbConnection {
+
+    private static final Dotenv DOTENV = Dotenv.configure()
+            .ignoreIfMissing()
+            .load();
+
+    private static final String URI =
+            getRequiredValue("MONGODB_URI");
+
+    private static final String DATABASE_NAME =
+            getRequiredValue("MONGODB_DATABASE");
+
+    private static final String COLLECTION_NAME =
+            getRequiredValue("MONGODB_COLLECTION");
 
     private static MongoClient mongoClient;
     private static MongoCollection<Document> collection;
@@ -15,22 +29,22 @@ public class MongoDbConnection {
         // Verhindert das Erzeugen von Objekten dieser Klasse
     }
 
-    public static MongoCollection<Document> getCollection() {
+    public static synchronized MongoCollection<Document> getCollection() {
         if (collection == null) {
             try {
-                mongoClient = MongoClients.create(
-                        "mongodb://ls5vs016.cs.tu-dortmund.de:9929"
-                );
+                mongoClient = MongoClients.create(URI);
 
                 MongoDatabase database =
-                        mongoClient.getDatabase("myDB");
+                        mongoClient.getDatabase(DATABASE_NAME);
 
                 collection =
-                        database.getCollection("Callgraphs");
+                        database.getCollection(COLLECTION_NAME);
 
             } catch (Exception e) {
+                closeConnection();
+
                 throw new IllegalStateException(
-                        "MongoDB-Verbindung konnte nicht hergestellt werden.",
+                        "Die MongoDB-Verbindung konnte nicht hergestellt werden.",
                         e
                 );
             }
@@ -39,11 +53,24 @@ public class MongoDbConnection {
         return collection;
     }
 
-    public static void closeConnection() {
+    public static synchronized void closeConnection() {
         if (mongoClient != null) {
             mongoClient.close();
             mongoClient = null;
             collection = null;
         }
+    }
+
+    private static String getRequiredValue(String variableName) {
+        String value = DOTENV.get(variableName);
+
+        if (value == null || value.isBlank()) {
+            throw new IllegalStateException(
+                    "Die Umgebungsvariable " + variableName
+                            + " wurde nicht festgelegt."
+            );
+        }
+
+        return value;
     }
 }

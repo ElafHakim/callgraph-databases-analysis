@@ -1,5 +1,8 @@
-package CallGraphApp;
+package de.callgraph.database.neo4j;
 
+import de.callgraph.benchmark.CsvFileOutput;
+import de.callgraph.benchmark.TimeUtil;
+import io.github.cdimascio.dotenv.Dotenv;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
@@ -15,126 +18,272 @@ import java.io.IOException;
 
 import static org.neo4j.driver.Values.parameters;
 
-public class Neo4j implements AutoCloseable {
-    @Override
-    public void close() {
+public final class Neo4j implements AutoCloseable {
+
+    private static final Dotenv DOTENV = Dotenv.configure()
+            .ignoreIfMissing()
+            .load();
+
+    private static final String URI =
+            getRequiredValue("NEO4J_URI");
+
+    private static final String USER =
+            getRequiredValue("NEO4J_USER");
+
+    private static final String PASSWORD =
+            getRequiredValue("NEO4J_PASSWORD");
+
+    private static final String CALL_GRAPH_DIRECTORY =
+            getRequiredValue("CALL_GRAPH_DIRECTORY");
+
+    private static Driver neo4jDriver;
+
+    private static String graphName;
+    private static JSONArray jsonArr;
+
+    private Neo4j() {
+        // Verhindert das Erzeugen von Objekten dieser Klasse
     }
-    public static Driver neo4jDriver;
+
     public static void createDriver() {
+        if (neo4jDriver != null) {
+            return;
+        }
+
         try {
-            neo4jDriver = GraphDatabase.driver("bolt://ls5vs016.cs.tu-dortmund.de:9008",  // 9778 connection failed nach 4 graphs
-                    AuthTokens.basic("neo4j", "neo5j"));
+            neo4jDriver = GraphDatabase.driver(
+                    URI,
+                    AuthTokens.basic(USER, PASSWORD)
+            );
+
             neo4jDriver.verifyConnectivity();
+
         } catch (Exception e) {
-            neo4jDriver.close();//Closing a driver immediately shuts down all open connections.
-            throw new IllegalStateException("Cannot create neo4jDriver  !", e);
+            closeConnection();
+
+            throw new IllegalStateException(
+                    "Die Neo4j-Verbindung konnte nicht hergestellt werden.",
+                    e
+            );
         }
     }
 
-    static String graphName;
-    static JSONArray jsonArr;
-
-    public static void main(String... args) throws Exception {
-
-        JSONObject method ;
-        long id ;
-        String name ;
-        String descriptor;
-        long paramCnt ;
-        String declaredClass ;
+    public static void main(String... args) {
         createDriver();
-        CsvFileOutput csvFileOutput = new CsvFileOutput("neo4j-lauftest2-clojure");
+
+        CsvFileOutput csvFileOutput =
+                new CsvFileOutput("neo4j-lauftest2-clojure");
+
         JSONParser parser = new JSONParser();
+
         try {
-            File dir = new File("D:\\BA\\neuCG");
-            File[] directoryListing = dir.listFiles();
-            assert directoryListing != null;
-            long durationOf100Graphs = 0;
-            System.out.println("-----start ------");
-            //for (int k = 0; k < 5; k++) {
+            File directory = new File(CALL_GRAPH_DIRECTORY);
+            File[] directoryListing = directory.listFiles();
 
-           /*for (int f = 0; f < directoryListing.length; f++) {
-                File cgFile = directoryListing[f];*/
+            if (directoryListing == null) {
+                throw new IllegalArgumentException(
+                        "Der Callgraph-Ordner konnte nicht gelesen werden: "
+                                + directory.getAbsolutePath()
+                );
+            }
 
-            for (File cgFile : directoryListing) { // ein Callgraph
+            long durationOfAllGraphs = 0;
 
-                graphName = cgFile.getName();
-                jsonArr = (JSONArray) parser.parse(new FileReader(cgFile));
-                // long durationMsForNode, durationMsForEdge;
-                //long durationTotal = 0;
-                //long startTimeForNode = System.currentTimeMillis();
+            System.out.println("----- Start -----");
+
+            for (File callGraphFile : directoryListing) {
+                if (!callGraphFile.isFile()) {
+                    continue;
+                }
+
+                graphName = callGraphFile.getName();
+
+                try (FileReader reader = new FileReader(callGraphFile)) {
+                    jsonArr = (JSONArray) parser.parse(reader);
+                }
 
                 long startTime = System.currentTimeMillis();
-                try (Session sessionForNodes = neo4jDriver.session()) {
 
-                    for (int i = 0; i < jsonArr.size(); i++) {
+                createNodes();
+                createEdges();
 
-                         method = (JSONObject) jsonArr.get(i);
-                         id = (long) method.get("id");
-                         name = (String) method.get("name");
-                         descriptor = (String) method.get("descriptor");
-                         paramCnt = (long) method.get("paramCnt");
-                         declaredClass = (String) method.get("declaredClass");
-                        sessionForNodes.run("CREATE (n:Method {uid :$uid,  graphName: $graphName, name: $name, id: $id, descriptor:$descriptor, paramCnt: $paramCnt, declaredClass: $declaredClass })",
-                                parameters("uid", graphName + id, "graphName", graphName, "name", name, "id", id, "descriptor", descriptor, "paramCnt", paramCnt, "declaredClass", declaredClass));
+                long durationSeconds =
+                        (System.currentTimeMillis() - startTime) / 1000;
 
-                        // durationMsForNode = System.currentTimeMillis() - startTimeForNode;
-                        //durationMsTotal += durationMsForNode;
-                    }// node
+                csvFileOutput.append(
+                        callGraphFile.getName(),
+                        String.valueOf(durationSeconds)
+                );
 
-                    sessionForNodes.run("CREATE INDEX nodeIndex IF NOT EXISTS FOR (n:Method) ON (n.graphName, n.name, n.declaredClass ) ");
-                    sessionForNodes.run("CREATE INDEX graphNameIndex IF NOT EXISTS FOR (n:Method) ON (n.graphName ) ");
-                    sessionForNodes.run("CREATE CONSTRAINT uniqueConstraint IF NOT EXISTS FOR (n:Method) REQUIRE n.uid IS UNIQUE ");
-                } catch (Exception e) {
-                    throw new IllegalStateException("Cannot create Session to create nodes!", e);
-                }
+                System.out.println(
+                        graphName + " " + durationSeconds + " Sekunden"
+                );
 
-                JSONObject method1;
-                long id2;
-                JSONArray invocations;
-                JSONObject invObj ;
-                String algorithm ;
-                long targetNode;
-                //long startTimeForEdge = System.currentTimeMillis();
-                try (Session sessionForEdges = neo4jDriver.session()) {
+                durationOfAllGraphs += durationSeconds;
+            }
 
-                    for (int i = 0; i < jsonArr.size(); i++) {
-                         method1 = (JSONObject) jsonArr.get(i);
-                         id2 = (long) method1.get("id");
-                         invocations = (JSONArray) method1.get("invocations");
-                        if (invocations.size() != 0) {
-                            for (int j = 0; j < invocations.size(); j++) {
-                                 invObj = (JSONObject) invocations.get(j);
-                                 algorithm = (String) invObj.get("algorithm");
-                                 targetNode = (long) invObj.get("targetNode");
+            TimeUtil.setValue(0, durationOfAllGraphs);
 
-                                sessionForEdges.run("MATCH (m1:Method{uid : $uid }),(m2:Method{ uid: $targetUid })" +
-                                                "CREATE (m1)-[:calls{algorithm: $algorithm}]->(m2)",
-                                        parameters("uid", graphName + id2, "targetUid", graphName + targetNode, "algorithm", algorithm));
-
-                            }// invocations loop
-                        } // if
-                    } // edge loop
-                    sessionForEdges.run("CREATE INDEX algorithmIndex IF NOT EXISTS FOR ()-[r:calls]-() ON (r.algorithm) ");
-                } catch (Exception e) {
-                    throw new IllegalStateException("Cannot create session to create edges!", e);
-                }
-
-                //durationMsForEdge = System.currentTimeMillis() - startTimeForEdge;
-                //durationMsTotal += durationMsForEdge;
-
-                long durationSeconds = (System.currentTimeMillis() - startTime) / 1000; // for nodes und edges
-                csvFileOutput.append(cgFile.getName(), String.valueOf(durationSeconds));
-                System.out.println(graphName + " " + durationSeconds + " seconds");
-                durationOf100Graphs += durationSeconds;
-
-
-
-            } // directoryListing
-            TimeUtil.setValue(0, durationOf100Graphs);
-            // }//k
         } catch (IOException | ParseException e) {
-            e.printStackTrace();
+            throw new IllegalStateException(
+                    "Die Callgraph-Dateien konnten nicht verarbeitet werden.",
+                    e
+            );
+
+        } finally {
+            closeConnection();
         }
-    } // main
+    }
+
+    private static void createNodes() {
+        try (Session session = neo4jDriver.session()) {
+            for (Object element : jsonArr) {
+                JSONObject method = (JSONObject) element;
+
+                long id = (long) method.get("id");
+                String name = (String) method.get("name");
+                String descriptor = (String) method.get("descriptor");
+                long paramCnt = (long) method.get("paramCnt");
+                String declaredClass =
+                        (String) method.get("declaredClass");
+
+                session.run(
+                        """
+                        CREATE (n:Method {
+                            uid: $uid,
+                            graphName: $graphName,
+                            name: $name,
+                            id: $id,
+                            descriptor: $descriptor,
+                            paramCnt: $paramCnt,
+                            declaredClass: $declaredClass
+                        })
+                        """,
+                        parameters(
+                                "uid", graphName + id,
+                                "graphName", graphName,
+                                "name", name,
+                                "id", id,
+                                "descriptor", descriptor,
+                                "paramCnt", paramCnt,
+                                "declaredClass", declaredClass
+                        )
+                );
+            }
+
+            session.run(
+                    """
+                    CREATE INDEX nodeIndex IF NOT EXISTS
+                    FOR (n:Method)
+                    ON (n.graphName, n.name, n.declaredClass)
+                    """
+            );
+
+            session.run(
+                    """
+                    CREATE INDEX graphNameIndex IF NOT EXISTS
+                    FOR (n:Method)
+                    ON (n.graphName)
+                    """
+            );
+
+            session.run(
+                    """
+                    CREATE CONSTRAINT uniqueConstraint IF NOT EXISTS
+                    FOR (n:Method)
+                    REQUIRE n.uid IS UNIQUE
+                    """
+            );
+
+        } catch (Exception e) {
+            throw new IllegalStateException(
+                    "Die Neo4j-Knoten konnten nicht erstellt werden.",
+                    e
+            );
+        }
+    }
+
+    private static void createEdges() {
+        try (Session session = neo4jDriver.session()) {
+            for (Object element : jsonArr) {
+                JSONObject method = (JSONObject) element;
+
+                long sourceId = (long) method.get("id");
+                JSONArray invocations =
+                        (JSONArray) method.get("invocations");
+
+                if (invocations == null || invocations.isEmpty()) {
+                    continue;
+                }
+
+                for (Object invocationElement : invocations) {
+                    JSONObject invocation =
+                            (JSONObject) invocationElement;
+
+                    String algorithm =
+                            (String) invocation.get("algorithm");
+
+                    long targetNode =
+                            (long) invocation.get("targetNode");
+
+                    session.run(
+                            """
+                            MATCH
+                                (source:Method {uid: $sourceUid}),
+                                (target:Method {uid: $targetUid})
+                            CREATE
+                                (source)-[:calls {
+                                    algorithm: $algorithm
+                                }]->(target)
+                            """,
+                            parameters(
+                                    "sourceUid", graphName + sourceId,
+                                    "targetUid", graphName + targetNode,
+                                    "algorithm", algorithm
+                            )
+                    );
+                }
+            }
+
+            session.run(
+                    """
+                    CREATE INDEX algorithmIndex IF NOT EXISTS
+                    FOR ()-[relationship:calls]-()
+                    ON (relationship.algorithm)
+                    """
+            );
+
+        } catch (Exception e) {
+            throw new IllegalStateException(
+                    "Die Neo4j-Kanten konnten nicht erstellt werden.",
+                    e
+            );
+        }
+    }
+
+    public static void closeConnection() {
+        if (neo4jDriver != null) {
+            neo4jDriver.close();
+            neo4jDriver = null;
+        }
+    }
+
+    @Override
+    public void close() {
+        closeConnection();
+    }
+
+    private static String getRequiredValue(String variableName) {
+        String value = DOTENV.get(variableName);
+
+        if (value == null || value.isBlank()) {
+            throw new IllegalStateException(
+                    "Die Umgebungsvariable "
+                            + variableName
+                            + " wurde nicht festgelegt."
+            );
+        }
+
+        return value;
+    }
 }

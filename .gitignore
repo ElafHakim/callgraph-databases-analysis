@@ -12,3 +12,6 @@ application-local.properties
 # Betriebssystem
 .DS_Store
 Thumbs.db
+
+# Sonstiges
+.env
