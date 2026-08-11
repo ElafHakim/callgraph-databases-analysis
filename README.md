@@ -1,7 +1,5 @@
-# Callgraph Databases Analysis
+# MongoDB vs MySQL vs Neo4j
 
 Dieses Projekt vergleicht MongoDB, MySQL und Neo4j bei der Speicherung und Abfrage von Java-Callgraphen.
 
-Die Callgraphen werden aus Java-JAR-Dateien erzeugt und anschließend in die drei Datenbanken importiert. Dabei werden die Importzeiten und die Laufzeiten verschiedener Abfragen gemessen.
-
-Die Messergebnisse werden als CSV-Dateien gespeichert und anschließend mit Microsoft Excel ausgewertet und durch Balkendiagramme visualisiert.
+Dieses Projekt wurde ursprünglich im 17.10.2022 im Rahmen meiner Bachelorarbeit entwickelt und fertig abgegeben. und begleitet ein wissenschaftliches Ausargeitung zum Thema _Analyse der Speicher- und Abfrageperformance verschiedener Datenbank-Technologien im Kontext großer Callgraphen._
