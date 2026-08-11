@@ -1,0 +1,14 @@
+# Java und Maven
+target/
+*.class
+
+# Visual Studio Code
+.vscode/
+
+# Zugangsdaten und lokale Konfiguration
+.env
+application-local.properties
+
+# Betriebssystem
+.DS_Store
+Thumbs.db
